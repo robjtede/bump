@@ -1,9 +1,13 @@
-use std::{fmt::Write as _, fs, mem};
+#![allow(dead_code)]
+
+use std::{fmt::Write as _, fs};
 
 use cargo_metadata::{Dependency, DependencyKind, Metadata, Package, PackageId};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input, MultiSelect};
 use itertools::Itertools as _;
 use toml_edit::Document;
+
+mod utils;
 
 fn main() {
     let mut args = std::env::args().skip_while(|val| !val.starts_with("--manifest-path"));
@@ -83,10 +87,15 @@ fn main() {
     let new_version = Input::<String>::with_theme(&ColorfulTheme::default())
         .with_prompt("New version:")
         .validate_with(|input: &String| -> Result<(), String> {
-            match semver::Version::parse(input) {
-                Ok(_) => Ok(()),
-                Err(_) => Err(format!("{input} is not a valid SemVer string")),
+            let Ok(v2) = semver::Version::parse(input) else {
+                return Err(format!("{input} is not a valid SemVer string"));
+            };
+
+            if v2 <= pkg.version {
+                return Err("New version must be higher than current version".to_owned());
             }
+
+            Ok(())
         })
         .interact_text()
         .unwrap();
@@ -94,23 +103,16 @@ fn main() {
     let target_manifest = fs::read_to_string(&pkg.manifest_path).unwrap();
     let mut target_manifest = target_manifest.parse::<Document>().unwrap();
 
-    let decor = mem::take(
-        target_manifest["package"]["version"]
-            .as_value_mut()
-            .unwrap()
-            .decor_mut(),
+    utils::replace_toml_string(
+        &mut target_manifest["package"]["version"],
+        &new_version.to_string(),
     );
-
-    target_manifest["package"]["version"] = toml_edit::value(&new_version);
-    *target_manifest["package"]["version"]
-        .as_value_mut()
-        .unwrap()
-        .decor_mut() = decor;
 
     fs::write(&pkg.manifest_path, target_manifest.to_string()).unwrap();
 
     match dependents.len() {
         0 => {}
+
         n => {
             println!(
                 "There are {n} workspace members that depend on {}.",
@@ -131,9 +133,48 @@ fn main() {
                 .unwrap();
 
             for selection in selections {
-                let (update_item, _) = &update_items[selection];
+                let (dependant_name, dep) = &dependents[selection];
 
-                println!(" updating {} => ^2", update_item);
+                let cur_req = &dep.req;
+                let new_req = match utils::updated_req(
+                    cur_req,
+                    &pkg.version,
+                    &semver::Version::parse(&new_version).unwrap(),
+                ) {
+                    utils::SemverUpdateKind::CurrentRequirementDoesNotMatchVersion => {
+                        eprintln!("CurrentRequirementDoesNotMatchVersion so not touching requirement on this crate");
+                        continue;
+                    }
+                    utils::SemverUpdateKind::ExistingReqCompatible => {
+                        eprintln!("ExistingReqCompatible so leaving it alone");
+                        continue;
+                    }
+                    utils::SemverUpdateKind::UpdateReq(req) => req,
+                };
+
+                println!(
+                    "in {} manifest, updating {} from {cur_req} => {new_req}",
+                    dependant_name, pkg.name,
+                );
+
+                let dependent_manifest_path = members
+                    .iter()
+                    .find_map(|(pkg, _, _)| {
+                        (&pkg.name == dependant_name).then_some(pkg.manifest_path.clone())
+                    })
+                    .unwrap();
+
+                let dependent_manifest = fs::read_to_string(&dependent_manifest_path).unwrap();
+                let mut dependent_manifest = dependent_manifest.parse::<Document>().unwrap();
+
+                let manifest_pkg_key = dep.rename.as_deref().unwrap_or(&dep.name);
+
+                utils::replace_toml_string(
+                    &mut dependent_manifest["dependencies"][manifest_pkg_key]["version"],
+                    utils::req_into_string(new_req),
+                );
+
+                fs::write(&dependent_manifest_path, dependent_manifest.to_string()).unwrap();
             }
         }
     };
