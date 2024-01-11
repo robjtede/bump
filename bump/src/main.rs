@@ -103,7 +103,7 @@ fn main() {
     let target_manifest = fs::read_to_string(&pkg.manifest_path).unwrap();
     let mut target_manifest = target_manifest.parse::<Document>().unwrap();
 
-    utils::replace_toml_string(
+    utils::replace_toml_string_item(
         &mut target_manifest["package"]["version"],
         &new_version.to_string(),
     );
@@ -169,9 +169,9 @@ fn main() {
 
                 let manifest_pkg_key = dep.rename.as_deref().unwrap_or(&dep.name);
 
-                utils::replace_toml_string(
-                    &mut dependent_manifest["dependencies"][manifest_pkg_key]["version"],
-                    utils::req_into_string(new_req),
+                update_dep_ver(
+                    &mut dependent_manifest["dependencies"][manifest_pkg_key],
+                    &new_req,
                 );
 
                 fs::write(&dependent_manifest_path, dependent_manifest.to_string()).unwrap();
@@ -187,6 +187,38 @@ fn main() {
             pkg.name,
         ))
         .unwrap();
+}
+
+fn update_dep_ver(item: &mut toml_edit::Item, new_req: &semver::VersionReq) {
+    let new_req_value = utils::req_into_string(new_req);
+
+    match item {
+        // eg: dep = "0.1"
+        item @ toml_edit::Item::Value(toml_edit::Value::String(_)) => {
+            utils::replace_toml_string_item(item, new_req_value);
+        }
+
+        // eg:
+        // [dependencies.dep]
+        // version = "0.1"
+        toml_edit::Item::Table(table) => {
+            utils::replace_toml_string_item(&mut table["version"], new_req_value);
+        }
+
+        // eg: dep = { version = "0.1" }
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(table)) => {
+            utils::replace_toml_string_value(&mut table["version"], new_req_value);
+        }
+
+        toml_edit::Item::Value(toml_edit::Value::Array(_)) => unimplemented!(),
+        toml_edit::Item::Value(toml_edit::Value::Boolean(_)) => unimplemented!(),
+        toml_edit::Item::Value(toml_edit::Value::Datetime(_)) => unimplemented!(),
+        toml_edit::Item::Value(toml_edit::Value::Float(_)) => unimplemented!(),
+        toml_edit::Item::Value(toml_edit::Value::Integer(_)) => unimplemented!(),
+
+        toml_edit::Item::None => unimplemented!(),
+        toml_edit::Item::ArrayOfTables(_) => unimplemented!(),
+    }
 }
 
 /// Iterate over packages given their package IDs.

@@ -1,9 +1,13 @@
 use std::{fmt, mem};
 
-pub(crate) fn replace_toml_string(item: &mut toml_edit::Item, new_val: impl Into<String>) {
-    let decor = mem::take(item.as_value_mut().unwrap().decor_mut());
-    *item = toml_edit::value(new_val.into());
-    *item.as_value_mut().unwrap().decor_mut() = decor;
+pub(crate) fn replace_toml_string_item(item: &mut toml_edit::Item, new_val: impl Into<String>) {
+    replace_toml_string_value(item.as_value_mut().unwrap(), new_val)
+}
+
+pub(crate) fn replace_toml_string_value(item: &mut toml_edit::Value, new_val: impl Into<String>) {
+    let decor = mem::take(item.decor_mut());
+    *item = toml_edit::Value::String(toml_edit::Formatted::new(new_val.into()));
+    *item.decor_mut() = decor;
 }
 
 #[derive(Debug, PartialEq)]
@@ -96,16 +100,16 @@ pub(crate) fn to_min_req(ver: &semver::Version) -> semver::VersionReq {
     semver::VersionReq::parse(ver.trim_end_matches(".0")).unwrap()
 }
 
-pub(crate) fn req_into_string(req: semver::VersionReq) -> String {
+pub(crate) fn req_into_string(req: &semver::VersionReq) -> String {
     // forked from original Display implementations but adjusted so that caret
     // versions don't emit a ^ symbol
 
     #[derive(Debug, PartialEq)]
-    struct VersionReqShort {
-        comparators: Vec<ComparatorShort>,
+    struct VersionReqShort<'a> {
+        comparators: Vec<ComparatorShort<'a>>,
     }
 
-    impl fmt::Display for VersionReqShort {
+    impl fmt::Display for VersionReqShort<'_> {
         fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             if self.comparators.is_empty() {
                 return formatter.write_str("*");
@@ -121,9 +125,9 @@ pub(crate) fn req_into_string(req: semver::VersionReq) -> String {
     }
 
     #[derive(Debug, PartialEq)]
-    struct ComparatorShort(semver::Comparator);
+    struct ComparatorShort<'a>(&'a semver::Comparator);
 
-    impl fmt::Display for ComparatorShort {
+    impl fmt::Display for ComparatorShort<'_> {
         fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             use semver::Op;
 
@@ -158,7 +162,7 @@ pub(crate) fn req_into_string(req: semver::VersionReq) -> String {
     }
 
     VersionReqShort {
-        comparators: req.comparators.into_iter().map(ComparatorShort).collect(),
+        comparators: req.comparators.iter().map(ComparatorShort).collect(),
     }
     .to_string()
 }
